@@ -68,12 +68,15 @@ func _ready() -> void:
 	sync_host.name = "WorldSyncHost"
 	sync_host.session = session
 	sync_host.logger = logger
+	sync_host.input_host = input_host
 	add_child(sync_host)
 	session.connect("peer_joined", sync_host, "on_peer_joined")
 
 	viewer = WaveViewerClient.new()
 	viewer.name = "WaveViewer"
 	viewer.logger = logger
+	viewer.session = session
+	viewer.input_client = input_client
 	add_child(viewer)
 	session.connect("sync_received", viewer, "on_sync")
 	viewer.connect("viewing_changed", input_client, "set_viewing")

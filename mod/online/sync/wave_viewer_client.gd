@@ -13,6 +13,8 @@ signal viewing_changed(active)
 
 var logger = null
 var active := false
+var session = null       # para conocer el id propio
+var input_client = null  # historial de inputs propios (predicción)
 
 var _defs := {}            # id → def
 var _textures := {}        # ruta → Texture (o null si falló)
@@ -29,6 +31,14 @@ var _last_seq := 0
 var _hidden_scene_items := []
 var _snap_count := 0
 var _fx_scenes := {}  # ruta → PackedScene (o null)
+# Predicción del jugador propio
+var _own_key = null
+var _own_speed := 0.0
+var _pred_pos = null      # posición predicha (Vector2) o null
+var _pred_error := Vector2.ZERO  # corrección pendiente, se desvanece de a poco
+var _map_rect := Rect2()
+const PRED_ERROR_DECAY := 12.0   # 1/s: qué tan rápido se absorben las correcciones
+const PRED_SNAP_DISTANCE := 200.0  # error mayor (teletransporte, muerte): saltar directo
 
 
 func _ready() -> void:
@@ -86,6 +96,7 @@ func _start_wave(msg: Dictionary) -> void:
 	outline.show_behind_parent = true
 	outline.modulate = msg.get("outline_mod", Color.white)
 	var r: Rect2 = msg.get("outline_rect", Rect2())
+	_map_rect = Rect2(r.position + Vector2(64, 64), r.size - Vector2(128, 128))
 	outline.rect_position = r.position
 	outline.rect_size = r.size
 	outline.patch_margin_left = 64
@@ -148,6 +159,8 @@ func _stop_wave() -> void:
 	_entities.clear()
 	_queue.clear()
 	_applied = null
+	_own_key = null
+	_pred_pos = null
 	_layers = []
 	for n in [_world, _bg_layer]:
 		if is_instance_valid(n):
@@ -200,7 +213,7 @@ func _apply_snapshot(msg: Dictionary) -> void:
 	buf.data_array = raw
 	var host_t := buf.get_u32()
 	var state := {"t": host_t, "cam": Vector2(buf.get_float(), buf.get_float()), "zoom": buf.get_float(),
-			"ents": [], "pos": {}, "fx": msg.get("fx", [])}
+			"ents": [], "pos": {}, "spr": {}, "fx": msg.get("fx", [])}
 	var entity_count := buf.get_u16()
 	for _e in entity_count:
 		var key := buf.get_u32()
@@ -216,6 +229,7 @@ func _apply_snapshot(msg: Dictionary) -> void:
 			sprites.append(sp)
 		state.ents.append([key, layer, pos, sprites])
 		state.pos[key] = pos
+		state.spr[key] = sprites
 	# Diferencia de relojes: se toma el mínimo observado (el paquete más rápido) y se
 	# deja derivar lentamente hacia arriba por si los relojes se separan.
 	var offset: int = OS.get_ticks_msec() - host_t
@@ -223,6 +237,7 @@ func _apply_snapshot(msg: Dictionary) -> void:
 		_clock_offset = offset
 	else:
 		_clock_offset += 1 if offset > _clock_offset + 5 else 0
+	_reconcile(msg.get("me", {}), state)
 	_queue.append(state)
 	if _queue.size() > 30:
 		_queue.pop_front()
@@ -273,6 +288,69 @@ func _apply_state(state: Dictionary) -> void:
 			_entities.erase(key)
 	for fx in state.fx:
 		_play_fx(fx)
+
+
+# Armas girando, animación de "rebote" del cuerpo, etc.: transformaciones locales de
+# los sprites interpoladas entre A y B (solo si el sprite no cambió de textura).
+func _interpolate_sprites(ent: Dictionary, sa, sb, alpha: float) -> void:
+	if sa == null or sb == null or sa.size() != sb.size() or sa.size() != ent.sprites.size():
+		return
+	for si in sa.size():
+		var x: Array = sa[si]
+		var y: Array = sb[si]
+		if x[0] != y[0]:
+			continue
+		var s: Sprite = ent.sprites[si]
+		s.position = Vector2(lerp(x[1], y[1], alpha), lerp(x[2], y[2], alpha))
+		s.rotation = lerp_angle(x[3] / Protocol.ROT_SCALE, y[3] / Protocol.ROT_SCALE, alpha)
+		s.scale = Vector2(lerp(x[4], y[4], alpha), lerp(x[5], y[5], alpha)) / Protocol.SCALE_SCALE
+
+
+# --- predicción del jugador propio ---
+
+# Con cada snapshot: partir de la posición real del host y re-simular los inputs que
+# el host todavía no había recibido. La diferencia con lo que se venía mostrando se
+# guarda como error y se desvanece de a poco (sin saltos visibles).
+func _reconcile(me: Dictionary, state: Dictionary) -> void:
+	if session == null or input_client == null:
+		return
+	var info = me.get(session.my_id)
+	if info == null or not state.pos.has(info[0]):
+		_own_key = null
+		_pred_pos = null
+		return
+	if _own_key != info[0]:
+		_log("Predicción activa: entidad %d, velocidad %.0f" % [info[0], float(info[1])])
+	_own_key = info[0]
+	_own_speed = float(info[1])
+	var ack := int(info[2])
+	var history: Array = input_client.history
+	while not history.empty() and history[0][0] <= ack:
+		history.pop_front()
+	var pos: Vector2 = state.pos[_own_key]
+	for h in history:
+		pos += h[1].normalized() * _own_speed * h[2]
+	pos = _clamp_to_map(pos)
+	if _pred_pos != null:
+		var shown: Vector2 = _pred_pos + _pred_error
+		_pred_error = shown - pos
+		if _pred_error.length() > PRED_SNAP_DISTANCE:
+			_pred_error = Vector2.ZERO
+	_pred_pos = pos
+
+
+func _predict(delta: float) -> void:
+	if _own_key == null or _pred_pos == null or not _entities.has(_own_key):
+		return
+	_pred_pos = _clamp_to_map(_pred_pos + input_client.current_move.normalized() * _own_speed * delta)
+	_pred_error *= max(0.0, 1.0 - PRED_ERROR_DECAY * delta)
+	_entities[_own_key].node.position = _pred_pos + _pred_error
+
+
+func _clamp_to_map(p: Vector2) -> Vector2:
+	if _map_rect.size == Vector2.ZERO:
+		return p
+	return Vector2(clamp(p.x, _map_rect.position.x, _map_rect.end.x), clamp(p.y, _map_rect.position.y, _map_rect.end.y))
 
 
 # Reproduce localmente una emisión de partículas del host (sangre, etc.).
@@ -361,11 +439,16 @@ func _process(_delta: float) -> void:
 		alpha = clamp((render_t - a.t) / float(b.t - a.t), 0.0, 1.0)
 	_camera.position = a.cam.linear_interpolate(b.cam, alpha) if b != null else a.cam
 	for key in _entities:
+		var ent = _entities[key]
 		var pa = a.pos.get(key)
 		if pa == null:
 			continue
 		var pb = b.pos.get(key, pa) if b != null else pa
-		_entities[key].node.position = pa.linear_interpolate(pb, alpha)
+		if key != _own_key or _pred_pos == null:  # el propio lo ubica _predict
+			ent.node.position = pa.linear_interpolate(pb, alpha)
+		if b != null:
+			_interpolate_sprites(ent, a.spr.get(key), b.spr.get(key), alpha)
+	_predict(_delta)
 
 
 func _log(text: String) -> void:

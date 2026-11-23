@@ -16,6 +16,7 @@ const MAX_SPRITES_PER_ENTITY := 255
 
 var session = null
 var logger = null
+var input_host = null  # remote_input_host: dispositivo y último input de cada cliente
 
 var _scene: Node = null
 var _in_wave := false
@@ -177,6 +178,9 @@ func _send_snapshot() -> void:
 	if not _fx.empty():
 		msg.fx = _fx
 		_fx = []
+	var me := _remote_players()
+	if not me.empty():
+		msg.me = me
 	_bytes_sent += msg.b.size()
 	session.broadcast(Protocol.CH_SNAPSHOT, false, msg)
 
@@ -193,6 +197,31 @@ func _track_particles(p: Node2D) -> void:
 	_particles[key] = [emitting, pos]
 	if started and p.filename != "" and _fx.size() < 64:
 		_fx.append([p.filename, pos, p.global_rotation, int(p.amount), p.global_scale])
+
+
+# Para la predicción en el cliente: {peer_id: [clave de su entidad, velocidad, último input]}.
+func _remote_players() -> Dictionary:
+	var out := {}
+	if input_host == null or input_host.devices.empty():
+		return out
+	var coop = get_node_or_null("/root/CoopService")
+	var players = _scene.get("_players")
+	if coop == null or typeof(players) != TYPE_ARRAY:
+		return out
+	var cp = coop.get("connected_players")
+	if typeof(cp) != TYPE_ARRAY:
+		return out
+	for peer_id in input_host.devices:
+		var d = input_host.devices[peer_id]
+		for i in min(cp.size(), players.size()):
+			if int(cp[i][0]) != d.device or not is_instance_valid(players[i]):
+				continue
+			var p = players[i]
+			var speed := 0.0
+			if p.get("dead") != true and p.get("_can_move") != false and p.has_method("get_move_speed"):
+				speed = p.get_move_speed()
+			out[peer_id] = [p.get_instance_id() & 0xFFFFFFFF, speed, d.last_seq]
+	return out
 
 
 func _entity_sprites(entity: Node2D, now: int) -> Array:

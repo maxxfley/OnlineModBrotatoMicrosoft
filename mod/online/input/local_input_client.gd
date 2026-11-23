@@ -11,16 +11,19 @@ const Protocol = preload("res://online_mod/net/protocol.gd")
 const SEND_INTERVAL := 1.0 / 60.0
 const REPEAT_DELAY := 0.3
 const REPEAT_INTERVAL := 0.09
-const KEEPALIVE_INTERVAL := 0.25  # reenviar ejes aunque no cambien
+const HISTORY_MAX := 180  # ~3 s de inputs para la predicción
 
 var session = null
 var logger = null
 var suspended := false  # p. ej. con el panel F9 abierto
+# Historial para la predicción del jugador propio: [seq, movimiento, segundos aplicados].
+# El visor descarta lo que el host ya confirmó y re-simula el resto.
+var history := []
+var current_move := Vector2.ZERO
 
 var _active := false
 var _seq := 0
 var _send_timer := 0.0
-var _keepalive_timer := 0.0
 var _last_mv := Vector2.ZERO
 var _last_aim := Vector2.ZERO
 var _ui_pressed := {}
@@ -41,6 +44,7 @@ func _ready() -> void:
 func start(host_name: String) -> void:
 	_active = true
 	_seq = 0
+	history.clear()
 	_ui_pressed.clear()
 	_repeat_timers.clear()
 	if not get_tree().paused:
@@ -85,20 +89,25 @@ func _process(delta: float) -> void:
 		_release_everything()
 		return
 	_process_ui(delta)
+	# Ejes a 60 Hz fijos (aunque no cambien): cada número de secuencia representa un
+	# tramo de tiempo, lo que permite al visor re-simular los inputs no confirmados.
 	_send_timer -= delta
-	_keepalive_timer -= delta
-	if _send_timer > 0.0:
-		return
-	_send_timer = SEND_INTERVAL
-	var mv := _read_movement()
-	var aim := Input.get_vector("rjoy_left", "rjoy_right", "rjoy_up", "rjoy_down")
-	var changed := not mv.is_equal_approx(_last_mv) or not aim.is_equal_approx(_last_aim)
-	if changed or _keepalive_timer <= 0.0:
-		_keepalive_timer = KEEPALIVE_INTERVAL
+	if _send_timer <= 0.0:
+		_send_timer += SEND_INTERVAL
+		if _send_timer < 0.0:
+			_send_timer = SEND_INTERVAL
+		var mv := _read_movement()
+		var aim := Input.get_vector("rjoy_left", "rjoy_right", "rjoy_up", "rjoy_down")
 		_last_mv = mv
 		_last_aim = aim
 		_seq += 1
 		session.send_to_host(Protocol.CH_INPUT, false, {"t": Protocol.INPUT_AXES, "s": _seq, "mv": mv, "aim": aim})
+		history.append([_seq, mv, 0.0])
+		if history.size() > HISTORY_MAX:
+			history.pop_front()
+	current_move = _last_mv
+	if not history.empty():
+		history.back()[2] += delta
 
 
 func _read_movement() -> Vector2:
@@ -134,6 +143,7 @@ func _send_ui(action: String, pressed: bool) -> void:
 
 
 func _release_everything() -> void:
+	current_move = Vector2.ZERO
 	for action in _ui_pressed.keys():
 		_send_ui(action, false)
 	_ui_pressed.clear()
