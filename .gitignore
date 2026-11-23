@@ -1,0 +1,31 @@
+# Archivos del juego oficial / decompilados (derechos de autor)
+decompiled/
+game/
+*.pck
+*.hvp
+*.exe
+*.dll
+*.gdc
+*.import
+.import/
+
+# Builds del mod
+build/
+dist/
+*.zip
+
+# Godot
+.godot/
+export_presets.cfg
+
+# Sistema / editor
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Claude local
+.claude/settings.local.json
+
+# Backups de archivos originales del juego
+backup/
