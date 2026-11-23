@@ -9,6 +9,7 @@ Empaquetado: ver installer/build_installer.py (PyInstaller, un único .exe).
 import hashlib
 import json
 import os
+import queue
 import string
 import subprocess
 import sys
@@ -52,11 +53,14 @@ def find_game_dirs():
 
 
 def game_running() -> bool:
+    # Se lee en bytes: tasklist responde en el idioma y la codificación de consola del
+    # sistema (p. ej. "INFORMACIÓN: ..." en cp850), que no es UTF-8.
     try:
         out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq Brotato.exe', '/NH'],
-                             capture_output=True, text=True, creationflags=0x08000000).stdout
-        return 'brotato.exe' in out.lower()
-    except OSError:
+                             stdin=subprocess.DEVNULL, capture_output=True,
+                             creationflags=0x08000000).stdout or b''
+        return b'brotato.exe' in out.lower()
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -140,6 +144,7 @@ def uninstall(game_dir: str, log):
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
+        self.queue = queue.Queue()
         root.title(f'Brotato Online v{MOD_VERSION} — Instalador')
         root.resizable(False, False)
         pad = {'padx': 10, 'pady': 4}
@@ -147,6 +152,8 @@ class App:
         tk.Label(root, text=f'Brotato Online v{MOD_VERSION}', font=('Segoe UI', 14, 'bold')).pack(**pad)
         tk.Label(root, text='Multijugador online para Brotato (Microsoft Store / Xbox / Game Pass)',
                  font=('Segoe UI', 9)).pack(padx=10)
+        tk.Label(root, text='by: maxxfley  ·  github: maxxfley', font=('Segoe UI', 9),
+                 fg='#666666').pack(padx=10)
 
         frm = tk.Frame(root)
         frm.pack(fill='x', **pad)
@@ -181,14 +188,27 @@ class App:
             self.log('No encontré Brotato en X:\\XboxGames\\Brotato\\Content. Elegí la carpeta con "Buscar...".')
         self.dir_var.trace_add('write', lambda *_: self.refresh())
         self.refresh()
+        self.poll()
 
+    # Tkinter no admite tocar la ventana desde otro hilo: el trabajo deja mensajes en
+    # la cola y la ventana la vacía cada 100 ms desde su propio hilo.
     def log(self, text: str):
-        def do():
-            self.log_box.configure(state='normal')
-            self.log_box.insert('end', text + '\n')
-            self.log_box.see('end')
-            self.log_box.configure(state='disabled')
-        self.root.after(0, do)
+        self.queue.put(('log', text))
+
+    def poll(self):
+        try:
+            while True:
+                kind, text = self.queue.get_nowait()
+                if kind == 'log':
+                    self.log_box.configure(state='normal')
+                    self.log_box.insert('end', text + '\n')
+                    self.log_box.see('end')
+                    self.log_box.configure(state='disabled')
+                elif kind == 'done':
+                    self.done()
+        except queue.Empty:
+            pass
+        self.root.after(100, self.poll)
 
     def browse(self):
         d = filedialog.askdirectory(title='Carpeta de Brotato (la que contiene boot.hvp)')
@@ -217,6 +237,7 @@ class App:
         if game_running():
             messagebox.showwarning('Brotato abierto', 'Cerrá Brotato antes de continuar.')
             return
+        self.log('Trabajando...')
         self.install_btn.configure(state='disabled')
         self.uninstall_btn.configure(state='disabled')
 
@@ -229,7 +250,7 @@ class App:
             except Exception as e:  # noqa: BLE001
                 self.log(f'ERROR: {e}')
             finally:
-                self.root.after(0, self.done)
+                self.queue.put(('done', ''))
         threading.Thread(target=work, daemon=True).start()
 
     def done(self):

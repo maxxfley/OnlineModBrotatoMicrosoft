@@ -132,7 +132,7 @@ func _process_ui(delta: float) -> void:
 	for action in Protocol.UI_ACTIONS:
 		if not InputMap.has_action(action):
 			continue
-		var down := Input.is_action_pressed(action)
+		var down := _is_physically_pressed(action)
 		var was_down: bool = _ui_pressed.get(action, false)
 		if down and not was_down:
 			_ui_pressed[action] = true
@@ -148,6 +148,44 @@ func _process_ui(delta: float) -> void:
 			if _repeat_timers[action] <= 0.0:
 				_repeat_timers[action] = REPEAT_INTERVAL
 				_send_ui(action, true)  # eco: nueva pulsación sin soltar
+
+
+# Estado real de la acción según teclas/botones/ejes físicos. No se usa
+# Input.is_action_pressed: con mando, el juego (InputService) emula la repetición de
+# la cruceta y del stick con eventos "presionado" sin "soltado", y la acción queda
+# trabada como presionada (la selección se movía sola en el host).
+const STICK_DEADZONE := 0.5
+const STICK_DIRS := {"ui_left": [JOY_AXIS_0, -1.0], "ui_right": [JOY_AXIS_0, 1.0],
+		"ui_up": [JOY_AXIS_1, -1.0], "ui_down": [JOY_AXIS_1, 1.0]}
+
+func _is_physically_pressed(action: String) -> bool:
+	var pads := Input.get_connected_joypads()
+	for ev in InputMap.get_action_list(action):
+		if ev is InputEventKey:
+			if ev.scancode != 0 and Input.is_key_pressed(ev.scancode):
+				return true
+			if ev.physical_scancode != 0 and Input.is_physical_key_pressed(ev.physical_scancode):
+				return true
+		elif ev is InputEventJoypadButton:
+			for pad in pads:
+				if Input.is_joy_button_pressed(pad, ev.button_index):
+					return true
+		elif ev is InputEventJoypadMotion:
+			for pad in pads:
+				var v := Input.get_joy_axis(pad, ev.axis)
+				if v * ev.axis_value > 0.0 and abs(v) > STICK_DEADZONE:
+					return true
+		elif ev is InputEventMouseButton:
+			if Input.is_mouse_button_pressed(ev.button_index):
+				return true
+	# El juego navega los menús con el stick izquierdo aunque no esté en el InputMap.
+	if STICK_DIRS.has(action):
+		var dir: Array = STICK_DIRS[action]
+		for pad in pads:
+			var v := Input.get_joy_axis(pad, dir[0])
+			if v * dir[1] > STICK_DEADZONE:
+				return true
+	return false
 
 
 func _send_ui(action: String, pressed: bool) -> void:

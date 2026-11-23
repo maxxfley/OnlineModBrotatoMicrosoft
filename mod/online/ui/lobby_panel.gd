@@ -50,6 +50,19 @@ func _build() -> void:
 	_hint_label.modulate = Color(1, 1, 1, 0.55)
 	add_child(_hint_label)
 
+	# Crédito del autor, arriba a la derecha.
+	var credit := Label.new()
+	credit.text = "by: maxxfley  github: maxxfley"
+	credit.align = Label.ALIGN_RIGHT
+	credit.anchor_left = 1.0
+	credit.anchor_right = 1.0
+	credit.margin_left = -500
+	credit.margin_right = -12
+	credit.margin_top = 2
+	credit.modulate = Color(1, 1, 1, 0.55)
+	credit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(credit)
+
 	_panel = PanelContainer.new()
 	_panel.rect_position = Vector2(1440, 20)
 	_panel.rect_min_size = Vector2(460, 0)
