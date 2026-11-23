@@ -10,7 +10,7 @@ extends Node
 const Protocol = preload("res://online_mod/net/protocol.gd")
 
 const WAVE_SCENE := "res://main.tscn"
-const SNAPSHOT_HZ := 30.0
+const SNAPSHOT_HZ := 60.0
 const SPRITE_CACHE_MS := 1000  # cada cuánto se vuelve a buscar sprites dentro de una entidad
 const MAX_SPRITES_PER_ENTITY := 255
 
@@ -27,8 +27,10 @@ var _defs := {}          # firma → id
 var _def_list := []      # [[id, def], ...] para clientes nuevos
 var _pending_defs := []
 var _sprite_cache := {}  # entidad instance_id → {t: ms, sprites: [nodos]}
-var _stats_timer := 0.0
 var _bytes_sent := 0
+var _cost_usec := 0
+var _cost_count := 0
+var _stats_wall_ms := 0
 var _particles := {}     # partícula instance_id → [emitiendo, posición]
 var _fx := []           # emisiones nuevas a enviar en el próximo snapshot
 
@@ -62,17 +64,29 @@ func _process(delta: float) -> void:
 		_wave_start_msg = {}
 		session.broadcast(Protocol.CH_CONTROL, true, {"t": Protocol.WAVE_END})
 		_log("Fin de oleada enviado")
+
 	if not _in_wave or session.ready_peer_count() == 0 or _wave_start_msg.empty():
 		return
 	_timer -= delta
 	if _timer > 0.0:
 		return
-	_timer = 1.0 / SNAPSHOT_HZ
+	_timer += 1.0 / SNAPSHOT_HZ
+	if _timer < 0.0:
+		_timer = 1.0 / SNAPSHOT_HZ
+	var t0 := OS.get_ticks_usec()
 	_send_snapshot()
-	_stats_timer += 1.0 / SNAPSHOT_HZ
-	if _stats_timer >= 10.0:
-		_log("Snapshots: %.1f KB/s por cliente, %d defs" % [_bytes_sent / 1024.0 / _stats_timer, _def_list.size()])
-		_stats_timer = 0.0
+	_cost_usec += OS.get_ticks_usec() - t0
+	_cost_count += 1
+	if _stats_wall_ms == 0:
+		_stats_wall_ms = OS.get_ticks_msec()
+	if OS.get_ticks_msec() - _stats_wall_ms >= 10000:
+		var wall_s: float = max(0.001, (OS.get_ticks_msec() - _stats_wall_ms) / 1000.0)
+		_log("Snapshots: %.1f KB/s por cliente, %d defs, %.2f ms por snapshot, %.1f snapshots/s" % [
+				_bytes_sent / 1024.0 / wall_s, _def_list.size(), _cost_usec / 1000.0 / max(1, _cost_count),
+				_cost_count / wall_s])
+		_stats_wall_ms = OS.get_ticks_msec()
+		_cost_usec = 0
+		_cost_count = 0
 		_bytes_sent = 0
 
 

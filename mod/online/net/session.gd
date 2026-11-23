@@ -343,7 +343,7 @@ func _on_packet(sender: int, data: PoolByteArray) -> void:
 	elif t == Protocol.INPUT_AXES or t == Protocol.INPUT_UI:
 		if state == State.HOSTING and peers.has(sender) and peers[sender].ready:
 			emit_signal("input_received", sender, msg)
-	elif t == Protocol.WAVE_START or t == Protocol.WAVE_END or t == Protocol.DEFS or t == Protocol.SNAP or t == Protocol.UI_MIRROR:
+	elif t == Protocol.WAVE_START or t == Protocol.WAVE_END or t == Protocol.DEFS or t == Protocol.SNAP or t == Protocol.UI_MIRROR or t == Protocol.SOUND:
 		if state == State.CONNECTED and sender == 1:
 			emit_signal("sync_received", msg)
 	elif t == Protocol.HELLO:

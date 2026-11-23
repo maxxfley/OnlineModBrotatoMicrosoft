@@ -2,7 +2,7 @@ extends Reference
 # Protocolo de mensajes del mod. Cada mensaje es un Dictionary con la clave "t"
 # (tipo) serializado con var2bytes (sin objetos: bytes2var no los permite).
 
-const PROTOCOL_VERSION := 5
+const PROTOCOL_VERSION := 6
 const DEFAULT_PORT := 24565
 const MAX_CLIENTS := 3  # host + 3 = 4 jugadores (máximo del co-op)
 
@@ -27,6 +27,7 @@ const WAVE_START := "wstart"  # confiable: mapa de la oleada {w, h, tiles, cells
 const WAVE_END := "wend"      # confiable: la oleada terminó (menús)
 const DEFS := "defs"          # confiable: definiciones de sprites {list: [[id, def], ...]}
 const SNAP := "snap"          # no confiable: {s: seq, n: tamaño, b: PoolByteArray comprimido}
+const SOUND := "snd"          # no confiable: {l: [[ruta, volumen_db, tono, posición o null], ...]}
 const UI_MIRROR := "uim"      # confiable: {n: tamaño, b: payload comprimido} (ver ui_mirror_host.gd)
 
 # Capas de dibujo del visor (mismo orden que la escena de oleada del juego)

@@ -18,6 +18,9 @@ var _peers_label: Label
 var _messages_label: Label
 var _hint_label: Label
 var _messages := []
+var _ips_label: Label
+
+const CONFIG_PATH := "user://online_mod.cfg"
 
 
 func _ready() -> void:
@@ -71,12 +74,12 @@ func _build() -> void:
 	var row := HBoxContainer.new()
 	box.add_child(row)
 	_ip_edit = LineEdit.new()
-	_ip_edit.text = "127.0.0.1"
+	_ip_edit.text = _load_setting("ip", "127.0.0.1")
 	_ip_edit.placeholder_text = "IP del host"
 	_ip_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(_ip_edit)
 	_port_edit = LineEdit.new()
-	_port_edit.text = str(Protocol.DEFAULT_PORT)
+	_port_edit.text = str(_load_setting("port", Protocol.DEFAULT_PORT))
 	_port_edit.rect_min_size = Vector2(90, 0)
 	row.add_child(_port_edit)
 
@@ -85,6 +88,13 @@ func _build() -> void:
 	_host_btn = _make_button("Hostear", "_on_host_pressed", buttons)
 	_join_btn = _make_button("Unirse", "_on_join_pressed", buttons)
 	_leave_btn = _make_button("Desconectar", "_on_leave_pressed", buttons)
+
+	_ips_label = Label.new()
+	_ips_label.modulate = Color(1, 1, 1, 0.7)
+	_ips_label.autowrap = true
+	_ips_label.rect_min_size = Vector2(430, 0)
+	_ips_label.text = "Tus IPs (pasale una a tus amigos): " + _local_ips()
+	box.add_child(_ips_label)
 
 	_status_label = Label.new()
 	box.add_child(_status_label)
@@ -113,11 +123,39 @@ func _port() -> int:
 
 
 func _on_host_pressed() -> void:
+	_save_settings()
 	session.host(_port())
 
 
 func _on_join_pressed() -> void:
+	_save_settings()
 	session.join(_ip_edit.text.strip_edges(), _port())
+
+
+func _load_setting(key: String, default):
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) != OK:
+		return default
+	return cfg.get_value("lobby", key, default)
+
+
+func _save_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	cfg.set_value("lobby", "ip", _ip_edit.text.strip_edges())
+	cfg.set_value("lobby", "port", _port())
+	cfg.save(CONFIG_PATH)
+
+
+# IPv4 de esta PC (red local y adaptadores de VPN como Radmin/ZeroTier/Tailscale).
+func _local_ips() -> String:
+	var ips := []
+	for a in IP.get_local_addresses():
+		var ip: String = a
+		if ip.find(":") != -1 or ip.begins_with("127.") or ip.begins_with("169.254."):
+			continue
+		ips.append(ip)
+	return PoolStringArray(ips).join(", ") if not ips.empty() else "(no se encontraron)"
 
 
 func _on_leave_pressed() -> void:

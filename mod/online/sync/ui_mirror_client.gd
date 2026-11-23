@@ -17,6 +17,12 @@ var _res := {}       # id → Resource
 var _have_state := false
 var _msgs := 0
 var _failed_shaders := {}
+# Interpolación: cada control va de su transformación anterior a la nueva durante el
+# intervalo entre actualizaciones, calculado en cada cuadro del cliente.
+const UPDATE_INTERVAL_MS := 1000.0 / 60.0
+const SNAP_DISTANCE := 300.0  # saltos grandes (cambio de pantalla) no se interpolan
+var _animating := {}  # key → {from_pos, to_pos, from_scale, to_scale, from_rot, to_rot, from_mod, to_mod}
+var _last_update_ms := 0
 
 
 func _ready() -> void:
@@ -55,8 +61,10 @@ func on_sync(msg: Dictionary) -> void:
 		_res[int(d[0])] = _build_res(d[1])
 	for key in payload.rm:
 		_remove(key)
+	_finish_animations()
 	for entry in payload.upd:
 		_apply(entry)
+	_last_update_ms = OS.get_ticks_msec()
 	if payload.has("order"):
 		var i := 0
 		for key in payload.order:
@@ -76,6 +84,32 @@ func on_sync(msg: Dictionary) -> void:
 	_set_showing(true)
 
 
+func _process(_delta: float) -> void:
+	if _animating.empty():
+		return
+	var alpha: float = clamp((OS.get_ticks_msec() - _last_update_ms) / UPDATE_INTERVAL_MS, 0.0, 1.0)
+	for key in _animating:
+		_step(_animating[key], alpha)
+
+
+func _step(a: Dictionary, alpha: float) -> void:
+	var c = a.node
+	if not is_instance_valid(c):
+		return
+	c.rect_position = a.from_pos.linear_interpolate(a.to_pos, alpha)
+	c.rect_rotation = lerp(a.from_rot, a.to_rot, alpha)
+	c.rect_scale = a.from_scale.linear_interpolate(a.to_scale, alpha)
+	c.modulate = a.from_mod.linear_interpolate(a.to_mod, alpha)
+
+
+# Antes de aplicar una actualización nueva, los controles que estaban en camino
+# quedan en su destino (los que no cambian ya no se animan).
+func _finish_animations() -> void:
+	for key in _animating:
+		_step(_animating[key], 1.0)
+	_animating.clear()
+
+
 func reset() -> void:
 	_clear()
 	_have_state = false
@@ -84,6 +118,7 @@ func reset() -> void:
 
 
 func _clear() -> void:
+	_animating.clear()
 	for key in _nodes:
 		_nodes[key].node.queue_free()
 	_nodes.clear()
@@ -100,6 +135,7 @@ func _set_showing(value: bool) -> void:
 # --- controles ---
 
 func _remove(key) -> void:
+	_animating.erase(key)
 	var n = _nodes.get(key)
 	if n != null:
 		n.node.queue_free()
@@ -120,14 +156,25 @@ func _apply(e: Array) -> void:
 		node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		node.focus_mode = Control.FOCUS_NONE
 		_root.add_child(node)
-		n = {"node": node, "type": type}
+		n = {"node": node, "type": type, "new": true}
 		_nodes[key] = n
 	var c: Control = n.node
-	c.rect_position = e[2]
-	c.rect_rotation = rad2deg(e[3])
-	c.rect_scale = e[4]
+	var to_pos: Vector2 = e[2]
+	var to_rot: float = rad2deg(e[3])
+	var to_scale: Vector2 = e[4]
+	var to_mod: Color = e[6]
 	c.rect_size = e[5]
-	c.modulate = e[6]
+	if n.has("new") or c.rect_position.distance_to(to_pos) > SNAP_DISTANCE:
+		n.erase("new")
+		_animating.erase(key)
+		c.rect_position = to_pos
+		c.rect_rotation = to_rot
+		c.rect_scale = to_scale
+		c.modulate = to_mod
+	else:
+		_animating[key] = {"node": c, "from_pos": c.rect_position, "to_pos": to_pos,
+				"from_rot": c.rect_rotation, "to_rot": to_rot, "from_scale": c.rect_scale, "to_scale": to_scale,
+				"from_mod": c.modulate, "to_mod": to_mod}
 	var p: Dictionary = e[7]
 	_apply_material(c, p)
 	if type == "TextureRect":

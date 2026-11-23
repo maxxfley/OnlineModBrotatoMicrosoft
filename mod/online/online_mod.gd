@@ -14,6 +14,7 @@ const WaveViewerClient = preload("res://online_mod/sync/wave_viewer_client.gd")
 const UiMirrorHost = preload("res://online_mod/sync/ui_mirror_host.gd")
 const UiMirrorClient = preload("res://online_mod/sync/ui_mirror_client.gd")
 const WaitOverlay = preload("res://online_mod/ui/wait_overlay.gd")
+const SoundSync = preload("res://online_mod/sync/sound_sync.gd")
 
 const TOGGLE_KEY := KEY_F9
 const DEV_AUTOCONNECT_DELAY := 4.0
@@ -28,6 +29,7 @@ var viewer: Node2D
 var ui_host: Node
 var ui_client: CanvasLayer
 var wait_overlay: CanvasLayer
+var sound_sync: Node
 
 var _toggle_was_down := false
 var _autoconnect_timer := -1.0
@@ -97,6 +99,13 @@ func _ready() -> void:
 	add_child(ui_client)
 	session.connect("sync_received", ui_client, "on_sync")
 	ui_client.connect("showing_changed", input_client, "set_screen")
+
+	sound_sync = SoundSync.new()
+	sound_sync.name = "SoundSync"
+	sound_sync.session = session
+	sound_sync.logger = logger
+	add_child(sound_sync)
+	session.connect("sync_received", sound_sync, "on_sync")
 
 	wait_overlay = WaitOverlay.new()
 	wait_overlay.name = "WaitOverlay"

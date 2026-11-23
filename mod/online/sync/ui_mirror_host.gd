@@ -11,7 +11,7 @@ extends Node
 
 const Protocol = preload("res://online_mod/net/protocol.gd")
 
-const HZ := 30.0
+const HZ := 60.0
 const WAVE_SCENE := "res://main.tscn"
 
 # Propiedades que se copian de recursos embebidos (sin archivo propio).
@@ -52,6 +52,8 @@ var _res_count := 0
 var _new_defs := []
 var _stats_time := 0.0
 var _stats_bytes := 0
+var _cost_usec := 0
+var _cost_count := 0
 
 
 func _ready() -> void:
@@ -68,14 +70,22 @@ func _process(delta: float) -> void:
 		return
 	_stats_time += delta
 	if _stats_time >= 10.0:
-		_log("Interfaz: %.1f KB/s, %d controles, %d recursos" % [_stats_bytes / 1024.0 / _stats_time, _sent.size(), _res_count])
+		_log("Interfaz: %.1f KB/s, %d controles, %d recursos, %.2f ms por actualización" % [
+				_stats_bytes / 1024.0 / _stats_time, _sent.size(), _res_count, _cost_usec / 1000.0 / max(1, _cost_count)])
+		_cost_usec = 0
+		_cost_count = 0
 		_stats_time = 0.0
 		_stats_bytes = 0
 	_timer -= delta
 	if _timer > 0.0:
 		return
-	_timer = 1.0 / HZ
+	_timer += 1.0 / HZ
+	if _timer < 0.0:
+		_timer = 1.0 / HZ
+	var t0 := OS.get_ticks_usec()
 	_send_update()
+	_cost_usec += OS.get_ticks_usec() - t0
+	_cost_count += 1
 
 
 func _send_update() -> void:

@@ -7,7 +7,7 @@ const Protocol = preload("res://online_mod/net/protocol.gd")
 
 const GROUND_TILESET := "res://resources/tiles/ground_tiles.tres"
 const OUTLINE_TEXTURE := "res://resources/tiles/tiles_outline.png"
-const RENDER_DELAY_MS := 100  # dibujar en el pasado para interpolar siempre
+const RENDER_DELAY_MS := 50  # dibujar en el pasado para interpolar siempre
 
 signal viewing_changed(active)
 
