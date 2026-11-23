@@ -20,12 +20,22 @@ GODOT = os.path.join(ROOT, '.tools', 'godot', 'Godot_v3.6.1-stable_win64.exe')
 NOISE = ('Godot Engine', 'OpenGL', 'WASAPI', 'Async. shader', 'Using GLES')
 
 
+# Acciones del juego que no existen en un proyecto vacío (para que el host de prueba
+# tenga los mismos nombres base que el juego real).
+GAME_ACTIONS = ['ui_info', 'ui_pause', 'ui_ban', 'rjoy_up', 'rjoy_down', 'rjoy_left', 'rjoy_right',
+                'ltrigger', 'rtrigger', 'button_move_left', 'button_move_right', 'button_move_up',
+                'button_move_down', 'analog_move_left', 'analog_move_right', 'analog_move_up',
+                'analog_move_down']
+
+
 def make_project(dev: bool) -> str:
     proj = tempfile.mkdtemp(prefix='gdcheck_')
     with open(os.path.join(proj, 'project.godot'), 'w', newline='\n') as f:
         f.write('config_version=4\n\n[application]\n\nconfig/name="online_mod_check"\n'
                 'run/main_scene="res://main.tscn"\n\n'
-                '[autoload]\n\nOnlineMod="*res://online_mod/online_mod.gd"\n')
+                '[autoload]\n\nOnlineMod="*res://online_mod/online_mod.gd"\n\n[input]\n\n')
+        for a in GAME_ACTIONS:
+            f.write(a + '={"deadzone": 0.5, "events": [  ]}\n')
     with open(os.path.join(proj, 'main.tscn'), 'w', newline='\n') as f:
         f.write('[gd_scene format=2]\n\n[node name="Main" type="Node"]\n')
     dst = os.path.join(proj, 'online_mod')
@@ -64,7 +74,8 @@ def syntax_check(proj: str) -> bool:
 def run_pair(proj: str, seconds: int) -> bool:
     procs = []
     for i in range(2):
-        procs.append(subprocess.Popen([GODOT, '--no-window', '--path', proj],
+        env = dict(os.environ, ONLINE_MOD_SELFTEST='1')
+        procs.append(subprocess.Popen([GODOT, '--no-window', '--path', proj], env=env,
                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, encoding='utf-8', errors='replace'))
         time.sleep(1.0)

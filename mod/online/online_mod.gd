@@ -7,6 +7,8 @@ const Logger = preload("res://online_mod/util/logger.gd")
 const Session = preload("res://online_mod/net/session.gd")
 const LobbyPanel = preload("res://online_mod/ui/lobby_panel.gd")
 const Protocol = preload("res://online_mod/net/protocol.gd")
+const RemoteInputHost = preload("res://online_mod/input/remote_input_host.gd")
+const LocalInputClient = preload("res://online_mod/input/local_input_client.gd")
 
 const TOGGLE_KEY := KEY_F9
 const DEV_AUTOCONNECT_DELAY := 4.0
@@ -14,9 +16,13 @@ const DEV_AUTOCONNECT_DELAY := 4.0
 var logger: Node
 var session: Node
 var lobby: CanvasLayer
+var input_host: Node
+var input_client: Node
 
 var _toggle_was_down := false
 var _autoconnect_timer := -1.0
+var _selftest_t := -1.0
+var _selftest_seq := 0
 
 
 func _ready() -> void:
@@ -34,6 +40,20 @@ func _ready() -> void:
 	session.logger = logger
 	add_child(session)
 	session.connect("state_changed", self, "_on_state_changed")
+
+	input_host = RemoteInputHost.new()
+	input_host.name = "RemoteInputHost"
+	input_host.logger = logger
+	add_child(input_host)
+	session.connect("peer_joined", input_host, "on_peer_joined")
+	session.connect("peer_left", input_host, "on_peer_left")
+	session.connect("input_received", input_host, "on_input")
+
+	input_client = LocalInputClient.new()
+	input_client.name = "LocalInputClient"
+	input_client.session = session
+	input_client.logger = logger
+	add_child(input_client)
 
 	lobby = LobbyPanel.new()
 	lobby.name = "LobbyPanel"
@@ -55,7 +75,11 @@ func _process(delta: float) -> void:
 	var down := Input.is_key_pressed(TOGGLE_KEY)
 	if down and not _toggle_was_down:
 		lobby.toggle()
+		input_client.suspended = lobby.is_open()
 	_toggle_was_down = down
+
+	if _selftest_t >= 0.0:
+		_run_selftest(delta)
 
 	if _autoconnect_timer > 0.0:
 		_autoconnect_timer -= delta
@@ -78,6 +102,37 @@ func _on_state_changed(state: int) -> void:
 		logger.tag = "HOST"
 	elif state != session.State.OFFLINE:
 		logger.tag = "CLIENT"
+	if state == session.State.CONNECTED:
+		input_client.start(session.host_name)
+		if BuildConfig.DEV_AUTOCONNECT and OS.get_environment("ONLINE_MOD_SELFTEST") == "1":
+			_selftest_t = 0.0
+			input_client.suspended = true  # el auto-test envía su propio input
+	else:
+		input_client.stop()
+
+
+# Desarrollo (ONLINE_MOD_SELFTEST=1): el cliente envía una secuencia de input
+# sintética para verificar la inyección en el host sin intervención humana.
+func _run_selftest(delta: float) -> void:
+	var before := _selftest_t
+	_selftest_t += delta
+	var steps := [
+		[0.5, {"t": Protocol.INPUT_UI, "a": "ui_accept", "p": true}],
+		[1.5, {"t": Protocol.INPUT_UI, "a": "ui_accept", "p": false}],
+		[2.0, {"t": Protocol.INPUT_UI, "a": "ui_down", "p": true}],
+		[2.1, {"t": Protocol.INPUT_UI, "a": "ui_down", "p": false}],
+	]
+	for step in steps:
+		if before < step[0] and _selftest_t >= step[0]:
+			session.send_to_host(Protocol.CH_CONTROL, true, step[1])
+	if _selftest_t >= 2.5 and _selftest_t < 3.5:
+		_selftest_seq += 1
+		session.send_to_host(Protocol.CH_INPUT, false, {"t": Protocol.INPUT_AXES, "s": _selftest_seq, "mv": Vector2(1, 0), "aim": Vector2(0, -0.5)})
+	elif _selftest_t >= 3.5:
+		_selftest_seq += 1
+		session.send_to_host(Protocol.CH_INPUT, false, {"t": Protocol.INPUT_AXES, "s": _selftest_seq, "mv": Vector2.ZERO, "aim": Vector2.ZERO})
+		logger.info("[selftest] secuencia enviada")
+		_selftest_t = -1.0
 
 
 # Muestra la versión del mod junto a la del juego en el menú principal, sin

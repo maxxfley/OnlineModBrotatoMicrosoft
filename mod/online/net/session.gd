@@ -5,6 +5,9 @@ extends Node
 signal state_changed(state)
 signal peers_changed(peers)
 signal message(text)
+signal peer_joined(peer_id, peer_name)  # host: cliente aceptado
+signal peer_left(peer_id)               # host: cliente desconectado
+signal input_received(peer_id, msg)     # host: input de un cliente
 
 const Protocol = preload("res://online_mod/net/protocol.gd")
 const Transport = preload("res://online_mod/net/enet_transport.gd")
@@ -77,6 +80,10 @@ func join(address: String, port: int) -> int:
 func leave() -> void:
 	if state == State.OFFLINE:
 		return
+	if state == State.HOSTING:
+		for id in peers:
+			if peers[id].ready:
+				emit_signal("peer_left", id)
 	_transport.close()
 	peers.clear()
 	ping_ms = -1
@@ -114,6 +121,7 @@ func _on_peer_disconnected(id: int) -> void:
 	peers.erase(id)
 	if was_ready:
 		_say("%s se desconectó" % peer_name)
+		emit_signal("peer_left", id)
 		_broadcast_peers()
 
 
@@ -148,6 +156,7 @@ func _handle_hello(id: int, msg: Dictionary) -> void:
 	peers[id].ready = true
 	_send(id, Protocol.CH_CONTROL, true, {"t": Protocol.WELCOME, "id": id, "host_name": local_name})
 	_say("%s se unió" % peers[id].name)
+	emit_signal("peer_joined", id, peers[id].name)
 	_broadcast_peers()
 
 
@@ -245,6 +254,9 @@ func _on_packet(sender: int, data: PoolByteArray) -> void:
 		else:
 			ping_ms = rtt
 			emit_signal("peers_changed", peers)
+	elif t == Protocol.INPUT_AXES or t == Protocol.INPUT_UI:
+		if state == State.HOSTING and peers.has(sender) and peers[sender].ready:
+			emit_signal("input_received", sender, msg)
 	elif t == Protocol.HELLO:
 		if state == State.HOSTING:
 			_handle_hello(sender, msg)
@@ -259,6 +271,12 @@ func _on_packet(sender: int, data: PoolByteArray) -> void:
 			_handle_peers(msg)
 	else:
 		_log("Mensaje desconocido '%s' de %d" % [str(t), sender])
+
+
+# Cliente: envía un mensaje al host (solo si el handshake terminó).
+func send_to_host(channel: int, reliable: bool, msg: Dictionary) -> void:
+	if state == State.CONNECTED:
+		_send(Transport.TARGET_SERVER, channel, reliable, msg)
 
 
 func _send(target: int, channel: int, reliable: bool, msg: Dictionary) -> void:
