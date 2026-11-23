@@ -19,11 +19,14 @@ const AXIS_LOG_INTERVAL_MS := 1000
 const MOVE_ACTIONS := ["analog_move_left", "analog_move_right", "analog_move_up", "analog_move_down"]
 const AIM_ACTIONS := ["rjoy_left", "rjoy_right", "rjoy_up", "rjoy_down"]
 
+signal remote_player_left(peer_name, device)
+
 var logger = null
 # devices[peer_id] = {device, last_seq, last_axes_ms, pressed_ui: {}}
 var devices := {}
 var _focus_override_active := false
 var _saved_focus_settings := {}
+var _reserved := {}  # nombre → dispositivo: quien se reconecta retoma su mismo jugador
 
 
 func _ready() -> void:
@@ -38,9 +41,12 @@ func _exit_tree() -> void:
 
 func on_peer_joined(peer_id: int, peer_name: String) -> void:
 	var device := _free_device()
+	if _reserved.has(peer_name) and _is_device_free(_reserved[peer_name]):
+		device = _reserved[peer_name]
 	if device < 0:
 		_log("Sin dispositivos virtuales libres para %s" % peer_name)
 		return
+	_reserved[peer_name] = device
 	devices[peer_id] = {"device": device, "name": peer_name, "last_seq": -1, "last_axes_ms": 0, "pressed_ui": {}}
 	_ensure_actions()
 	_apply_focus_override()
@@ -51,6 +57,7 @@ func on_peer_left(peer_id: int) -> void:
 	if not devices.has(peer_id):
 		return
 	var d = devices[peer_id]
+	emit_signal("remote_player_left", d.name, d.device)
 	_release_all(d)
 	devices.erase(peer_id)
 	_log("%s liberó el dispositivo virtual %d" % [d.name, d.device])
@@ -174,10 +181,41 @@ func _has_device_suffix(action: String) -> bool:
 	return idx > 0 and action.substr(idx + 1).is_valid_integer()
 
 
+# Al dejar de hostear se olvidan las reservas.
+func reset() -> void:
+	for peer_id in devices.keys():
+		on_peer_left(peer_id)
+	_reserved.clear()
+
+
+# ¿El dispositivo pertenece a un jugador que ya está en la partida (unido en el co-op)?
+func is_device_in_game(device: int) -> bool:
+	var coop = _coop_service()
+	if coop == null or typeof(coop.get("connected_players")) != TYPE_ARRAY:
+		return false
+	for entry in coop.connected_players:
+		if int(entry[0]) == device:
+			return true
+	return false
+
+
+func _is_device_free(device: int) -> bool:
+	for peer_id in devices:
+		if devices[peer_id].device == device:
+			return false
+	return true
+
+
 func _free_device() -> int:
 	var used := []
 	for peer_id in devices:
 		used.append(devices[peer_id].device)
+	# Primero dispositivos sin reserva (no quitarle el lugar a quien se está reconectando).
+	var reserved := _reserved.values()
+	for i in VIRTUAL_DEVICE_COUNT:
+		var dev: int = FIRST_VIRTUAL_DEVICE + i
+		if not dev in used and not dev in reserved:
+			return dev
 	for i in VIRTUAL_DEVICE_COUNT:
 		if not (FIRST_VIRTUAL_DEVICE + i) in used:
 			return FIRST_VIRTUAL_DEVICE + i

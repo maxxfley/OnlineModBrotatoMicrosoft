@@ -18,6 +18,10 @@ enum State { OFFLINE, HOSTING, CONNECTING, HANDSHAKE, CONNECTED }
 const PING_INTERVAL := 1.0
 const HANDSHAKE_TIMEOUT := 5.0
 const PING_LOG_EVERY := 5  # loguear pings cada N intervalos
+const PEER_TIMEOUT_MS := 5000      # sin paquetes en este tiempo → desconectado
+const RECONNECT_INTERVAL := 2.0
+const RECONNECT_WINDOW := 60.0     # segundos intentando volver antes de rendirse
+const RECONNECT_ATTEMPT_MS := 5000 # un intento que no avanza en este tiempo se aborta
 
 var state: int = State.OFFLINE
 var mod_version := ""
@@ -28,10 +32,17 @@ var peers := {}
 var host_name := ""
 var my_id := 0
 var ping_ms := -1
+var reconnecting := false  # cliente: se perdió la conexión y se está reintentando
 
 var _transport: Node
 var _ping_timer := 0.0
 var _ping_count := 0
+var _last_addr := ""
+var _last_port := 0
+var _last_host_recv := 0
+var _reconnect_timer := 0.0
+var _reconnect_deadline := 0
+var _attempt_ms := 0
 
 
 func _ready() -> void:
@@ -68,6 +79,8 @@ func host(port: int) -> int:
 
 
 func join(address: String, port: int) -> int:
+	_last_addr = address
+	_last_port = port
 	var err: int = _transport.join(address, port)
 	if err != OK:
 		_say("No se pudo conectar a %s:%d (error %d)" % [address, port, err])
@@ -79,6 +92,7 @@ func join(address: String, port: int) -> int:
 
 
 func leave() -> void:
+	reconnecting = false
 	if state == State.OFFLINE:
 		return
 	if state == State.HOSTING:
@@ -95,7 +109,12 @@ func leave() -> void:
 
 
 func _process(delta: float) -> void:
+	if reconnecting:
+		_process_reconnect(delta)
 	if state == State.OFFLINE:
+		return
+	if state == State.CONNECTED and OS.get_ticks_msec() - _last_host_recv > PEER_TIMEOUT_MS:
+		_connection_lost("Sin respuesta del host")
 		return
 	_ping_timer -= delta
 	if _ping_timer <= 0.0:
@@ -103,6 +122,7 @@ func _process(delta: float) -> void:
 		_send_pings()
 	if state == State.HOSTING:
 		_check_handshake_timeouts()
+		_check_peer_timeouts()
 
 
 # --- host ---
@@ -110,7 +130,7 @@ func _process(delta: float) -> void:
 func _on_peer_connected(id: int) -> void:
 	if state != State.HOSTING:
 		return
-	peers[id] = {"name": "?", "ping": -1, "ready": false, "since": OS.get_ticks_msec()}
+	peers[id] = {"name": "?", "ping": -1, "ready": false, "since": OS.get_ticks_msec(), "recv": OS.get_ticks_msec()}
 	_log("Peer %d conectado desde %s, esperando hello" % [id, _transport.get_peer_address(id)])
 
 
@@ -124,6 +144,17 @@ func _on_peer_disconnected(id: int) -> void:
 		_say("%s se desconectó" % peer_name)
 		emit_signal("peer_left", id)
 		_broadcast_peers()
+
+
+# Un cliente que deja de responder (se le cortó internet, crash) se da por
+# desconectado sin esperar el timeout de ENet, que puede tardar mucho más.
+func _check_peer_timeouts() -> void:
+	var now := OS.get_ticks_msec()
+	for id in peers.keys():
+		if peers.has(id) and peers[id].ready and now - int(peers[id].recv) > PEER_TIMEOUT_MS:
+			_log("Peer %d sin respuesta, se da por desconectado" % id)
+			_on_peer_disconnected(id)
+			_transport.kick(id)
 
 
 func _check_handshake_timeouts() -> void:
@@ -186,17 +217,67 @@ func _on_connected_to_server() -> void:
 
 
 func _on_connection_failed() -> void:
+	if reconnecting:
+		_transport.close()
+		_set_state(State.OFFLINE)
+		return  # se reintenta en _process_reconnect
 	_say("No se pudo conectar al host")
 	leave()
 
 
 func _on_server_disconnected() -> void:
-	_say("El host cerró la conexión")
-	leave()
+	_connection_lost("El host cerró la conexión")
+
+
+# --- reconexión (cliente) ---
+
+# Pérdida de conexión no pedida por el usuario: si ya estábamos jugando, se reintenta.
+func _connection_lost(reason: String) -> void:
+	var was_connected: bool = state == State.CONNECTED
+	_say(reason)
+	_transport.close()
+	peers.clear()
+	ping_ms = -1
+	if was_connected and _last_addr != "":
+		reconnecting = true
+		_reconnect_timer = 0.5
+		_reconnect_deadline = OS.get_ticks_msec() + int(RECONNECT_WINDOW * 1000)
+		_say("Reconectando a %s:%d..." % [_last_addr, _last_port])
+		_set_state(State.OFFLINE)
+	else:
+		leave()
+
+
+func _process_reconnect(delta: float) -> void:
+	if state == State.CONNECTING or state == State.HANDSHAKE:
+		if OS.get_ticks_msec() - _attempt_ms > RECONNECT_ATTEMPT_MS:
+			_transport.close()
+			_set_state(State.OFFLINE)
+		return  # hay un intento en curso
+	if state != State.OFFLINE:
+		return
+	if OS.get_ticks_msec() > _reconnect_deadline:
+		reconnecting = false
+		_say("No se pudo volver a conectar con el host")
+		_set_state(State.OFFLINE)
+		emit_signal("peers_changed", peers)
+		return
+	_reconnect_timer -= delta
+	if _reconnect_timer > 0.0:
+		return
+	_reconnect_timer = RECONNECT_INTERVAL
+	_log("Intento de reconexión...")
+	_attempt_ms = OS.get_ticks_msec()
+	if _transport.join(_last_addr, _last_port) == OK:
+		_set_state(State.CONNECTING)
 
 
 func _handle_welcome(msg: Dictionary) -> void:
 	host_name = str(msg.get("host_name", "Host"))
+	_last_host_recv = OS.get_ticks_msec()
+	if reconnecting:
+		reconnecting = false
+		_say("Reconectado")
 	_set_state(State.CONNECTED)
 	_say("Conectado a la partida de %s" % host_name)
 
@@ -246,6 +327,10 @@ func _on_packet(sender: int, data: PoolByteArray) -> void:
 		_log("Paquete inválido de %d" % sender)
 		return
 	var t = msg.t
+	if state == State.HOSTING and peers.has(sender):
+		peers[sender].recv = OS.get_ticks_msec()
+	elif sender == 1:
+		_last_host_recv = OS.get_ticks_msec()
 	if t == Protocol.PING:
 		_send(sender, Protocol.CH_INPUT, false, {"t": Protocol.PONG, "ts": msg.get("ts", 0)})
 	elif t == Protocol.PONG:

@@ -13,6 +13,7 @@ const WorldSyncHost = preload("res://online_mod/sync/world_sync_host.gd")
 const WaveViewerClient = preload("res://online_mod/sync/wave_viewer_client.gd")
 const UiMirrorHost = preload("res://online_mod/sync/ui_mirror_host.gd")
 const UiMirrorClient = preload("res://online_mod/sync/ui_mirror_client.gd")
+const WaitOverlay = preload("res://online_mod/ui/wait_overlay.gd")
 
 const TOGGLE_KEY := KEY_F9
 const DEV_AUTOCONNECT_DELAY := 4.0
@@ -26,12 +27,14 @@ var sync_host: Node
 var viewer: Node2D
 var ui_host: Node
 var ui_client: CanvasLayer
+var wait_overlay: CanvasLayer
 
 var _toggle_was_down := false
 var _autoconnect_timer := -1.0
 var _selftest_t := -1.0
 var _selftest_seq := 0
 var _fps_log_timer := 5.0
+var _selftest_dropped := false
 
 
 func _ready() -> void:
@@ -95,6 +98,14 @@ func _ready() -> void:
 	session.connect("sync_received", ui_client, "on_sync")
 	ui_client.connect("showing_changed", input_client, "set_screen")
 
+	wait_overlay = WaitOverlay.new()
+	wait_overlay.name = "WaitOverlay"
+	wait_overlay.logger = logger
+	wait_overlay.input_host = input_host
+	add_child(wait_overlay)
+	input_host.connect("remote_player_left", wait_overlay, "on_remote_player_left")
+	session.connect("peer_joined", wait_overlay, "on_peer_joined")
+
 	lobby = LobbyPanel.new()
 	lobby.name = "LobbyPanel"
 	lobby.session = session
@@ -150,12 +161,19 @@ func _on_state_changed(state: int) -> void:
 		logger.tag = "HOST"
 	elif state != session.State.OFFLINE:
 		logger.tag = "CLIENT"
+	if state == session.State.HOSTING or (state == session.State.OFFLINE and not session.reconnecting):
+		input_host.reset()
+		wait_overlay.reset()
 	if state == session.State.CONNECTED:
 		input_client.start(session.host_name)
 		if BuildConfig.DEV_AUTOCONNECT and OS.get_environment("ONLINE_MOD_SELFTEST") == "1":
 			_selftest_t = 0.0
 			input_client.suspended = true  # el auto-test envía su propio input
-	else:
+	elif session.reconnecting:
+		input_client.show_reconnecting()
+		viewer.reset()
+		ui_client.reset()
+	elif state == session.State.OFFLINE:
 		input_client.stop()
 		viewer.reset()
 		ui_client.reset()
@@ -183,6 +201,9 @@ func _run_selftest(delta: float) -> void:
 		session.send_to_host(Protocol.CH_INPUT, false, {"t": Protocol.INPUT_AXES, "s": _selftest_seq, "mv": Vector2.ZERO, "aim": Vector2.ZERO})
 		logger.info("[selftest] secuencia enviada")
 		_selftest_t = -1.0
+		if not _selftest_dropped:
+			_selftest_dropped = true
+			get_tree().create_timer(1.5, true).connect("timeout", session, "_connection_lost", ["[selftest] corte simulado"])
 
 
 # Muestra la versión del mod junto a la del juego en el menú principal, sin

@@ -71,8 +71,20 @@ func _update_overlay() -> void:
 	_overlay_root.visible = _active and not _viewing_wave and not _viewing_screen
 
 
+# Conexión perdida: se deja de enviar input, pero el juego local sigue pausado
+# (con un cartel) mientras se reintenta.
+func show_reconnecting() -> void:
+	_active = false
+	_viewing_wave = false
+	_viewing_screen = false
+	current_move = Vector2.ZERO
+	history.clear()
+	_overlay_label.text = "Se perdió la conexión con el host.\nReconectando..."
+	_overlay_root.visible = true
+
+
 func stop() -> void:
-	if not _active:
+	if not _active and not _paused_by_us and not _overlay_root.visible:
 		return
 	_active = false
 	_overlay_root.visible = false
