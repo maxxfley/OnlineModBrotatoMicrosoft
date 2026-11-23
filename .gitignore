@@ -29,3 +29,9 @@ desktop.ini
 
 # Backups de archivos originales del juego
 backup/
+
+# Herramientas descargadas (Godot, etc.)
+.tools/
+
+# Python
+__pycache__/
