@@ -29,6 +29,8 @@ var _paused_by_us := false
 var _overlay: CanvasLayer
 var _overlay_root: Control
 var _overlay_label: Label
+var _viewing_wave := false
+var _viewing_screen := false
 
 
 func _ready() -> void:
@@ -45,14 +47,24 @@ func start(host_name: String) -> void:
 		get_tree().paused = true
 		_paused_by_us = true
 	_overlay_label.text = "Conectado a la partida de %s\nTu teclado/mando controla tu jugador en la pantalla del host.\n(F9: panel online)" % host_name
-	_overlay_root.visible = true
+	_update_overlay()
 	_log("Enviando input al host")
 
 
 # Con el visor de oleada activo se oculta el cartel (el cliente ve la partida).
 func set_viewing(viewing: bool) -> void:
-	if _active:
-		_overlay_root.visible = not viewing
+	_viewing_wave = viewing
+	_update_overlay()
+
+
+# Con la pantalla del host visible (menús) también se oculta el cartel.
+func set_screen(showing: bool) -> void:
+	_viewing_screen = showing
+	_update_overlay()
+
+
+func _update_overlay() -> void:
+	_overlay_root.visible = _active and not _viewing_wave and not _viewing_screen
 
 
 func stop() -> void:

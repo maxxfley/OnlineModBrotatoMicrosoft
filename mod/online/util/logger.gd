@@ -63,11 +63,18 @@ func _process(delta: float) -> void:
 		return
 	var status: int = _sink.call("get_status")
 	if status == 2:  # STATUS_CONNECTED
-		while not _pending.empty():
-			var data: PoolByteArray = (_pending.pop_front() + "\n").to_utf8()
-			_sink.call("put_data", data)
+		flush_now()
 	elif status == 3 or status == 0:  # STATUS_ERROR / STATUS_NONE
 		_sink = null
+
+
+# Envía ya lo pendiente al receptor (útil antes de una operación que podría colgar el juego).
+func flush_now() -> void:
+	if _sink == null or int(_sink.call("get_status")) != 2:
+		return
+	while not _pending.empty():
+		var data: PoolByteArray = (_pending.pop_front() + "\n").to_utf8()
+		_sink.call("put_data", data)
 
 
 func _timestamp() -> String:

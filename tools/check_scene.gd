@@ -54,7 +54,38 @@ func _ready() -> void:
 	var wt := Timer.new()
 	wt.name = "WaveTimer"
 	add_child(wt)
-	wt.start(60)
+	wt.one_shot = true
+	wt.start(4)
+	var ui := CanvasLayer.new()
+	ui.name = "UI"
+	add_child(ui)
+	var vignette := ColorRect.new()
+	vignette.name = "DamageVignette"
+	vignette.anchor_right = 1.0
+	vignette.anchor_bottom = 1.0
+	var sh := Shader.new()
+	sh.code = "shader_type canvas_item;\nuniform float intensity = 0.0;\nvoid fragment() { COLOR = vec4(1.0, 0.0, 0.0, intensity); }\n"
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_param("intensity", 0.25)
+	vignette.material = mat
+	ui.add_child(vignette)
+	var panel := Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.1, 0.1, 0.3)
+	panel.add_stylebox_override("panel", sb)
+	panel.rect_position = Vector2(20, 20)
+	panel.rect_size = Vector2(300, 80)
+	ui.add_child(panel)
+	var label := Label.new()
+	label.name = "WaveLabel"
+	label.text = "Oleada de prueba"
+	label.rect_position = Vector2(10, 10)
+	panel.add_child(label)
+	var icon := TextureRect.new()
+	icon.texture = tex
+	icon.rect_position = Vector2(200, 10)
+	panel.add_child(icon)
 
 
 func _process(delta: float) -> void:

@@ -10,7 +10,7 @@ signal connection_failed()
 signal server_disconnected()
 signal packet_received(peer_id, data)
 
-const CHANNEL_COUNT := 3
+const CHANNEL_COUNT := 4
 const TARGET_BROADCAST := 0
 const TARGET_SERVER := 1
 const MODE_UNRELIABLE := 0

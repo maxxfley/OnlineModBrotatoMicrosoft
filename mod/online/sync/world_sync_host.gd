@@ -10,7 +10,7 @@ extends Node
 const Protocol = preload("res://online_mod/net/protocol.gd")
 
 const WAVE_SCENE := "res://main.tscn"
-const SNAPSHOT_HZ := 20.0
+const SNAPSHOT_HZ := 30.0
 const SPRITE_CACHE_MS := 1000  # cada cuánto se vuelve a buscar sprites dentro de una entidad
 const MAX_SPRITES_PER_ENTITY := 255
 
@@ -28,6 +28,8 @@ var _pending_defs := []
 var _sprite_cache := {}  # entidad instance_id → {t: ms, sprites: [nodos]}
 var _stats_timer := 0.0
 var _bytes_sent := 0
+var _particles := {}     # partícula instance_id → [emitiendo, posición]
+var _fx := []           # emisiones nuevas a enviar en el próximo snapshot
 
 
 func _ready() -> void:
@@ -71,6 +73,10 @@ func _process(delta: float) -> void:
 		_log("Snapshots: %.1f KB/s por cliente, %d defs" % [_bytes_sent / 1024.0 / _stats_timer, _def_list.size()])
 		_stats_timer = 0.0
 		_bytes_sent = 0
+
+
+func is_streaming_wave() -> bool:
+	return _in_wave
 
 
 # --- inicio de oleada: mapa ---
@@ -140,6 +146,9 @@ func _send_snapshot() -> void:
 		if layer == null:
 			continue
 		for entity in layer.get_children():
+			if entity is CPUParticles2D or entity is Particles2D:
+				_track_particles(entity)
+				continue
 			if not entity is Node2D or not entity.is_visible_in_tree():
 				continue
 			var sprites := _entity_sprites(entity, now)
@@ -151,6 +160,8 @@ func _send_snapshot() -> void:
 	for key in _sprite_cache.keys():
 		if not live.has(key):
 			_sprite_cache.erase(key)
+	if _particles.size() > 512:
+		_particles.clear()
 	var end := buf.get_position()
 	buf.seek(count_pos)
 	buf.put_u16(entity_count)
@@ -162,9 +173,26 @@ func _send_snapshot() -> void:
 
 	var raw: PoolByteArray = buf.data_array
 	_seq += 1
-	var msg := {"t": Protocol.SNAP, "s": _seq, "n": raw.size(), "b": raw.compress(File.COMPRESSION_DEFLATE), "hud": _hud()}
+	var msg := {"t": Protocol.SNAP, "s": _seq, "n": raw.size(), "b": raw.compress(File.COMPRESSION_DEFLATE)}
+	if not _fx.empty():
+		msg.fx = _fx
+		_fx = []
 	_bytes_sent += msg.b.size()
 	session.broadcast(Protocol.CH_SNAPSHOT, false, msg)
+
+
+# Partículas (sangre, polvo...): no se transmiten cuadro a cuadro. Se detecta cuándo
+# empiezan a emitir (el juego reutiliza los nodos: cambian de posición y se reinician)
+# y el cliente reproduce la misma escena de partículas localmente.
+func _track_particles(p: Node2D) -> void:
+	var key := p.get_instance_id()
+	var emitting: bool = p.emitting and p.is_visible_in_tree()
+	var pos: Vector2 = p.global_position
+	var prev = _particles.get(key)
+	var started: bool = emitting and (prev == null or not prev[0] or not prev[1].is_equal_approx(pos))
+	_particles[key] = [emitting, pos]
+	if started and p.filename != "" and _fx.size() < 64:
+		_fx.append([p.filename, pos, p.global_rotation, int(p.amount), p.global_scale])
 
 
 func _entity_sprites(entity: Node2D, now: int) -> Array:
@@ -172,6 +200,8 @@ func _entity_sprites(entity: Node2D, now: int) -> Array:
 	var cached = _sprite_cache.get(key)
 	if cached == null or now - cached.t > SPRITE_CACHE_MS:
 		var found := []
+		if entity is Sprite or entity is AnimatedSprite:
+			found.append(entity)  # p. ej. el destello de golpe es un AnimatedSprite suelto
 		_collect_sprites(entity, found)
 		cached = {"t": now, "sprites": found}
 		_sprite_cache[key] = cached
@@ -281,32 +311,6 @@ func _effective_modulate(node: CanvasItem, root: Node) -> Color:
 			break
 		n = n.get_parent()
 	return c
-
-
-# --- HUD ---
-
-func _hud() -> Dictionary:
-	var hud := {"players": []}
-	var wave_timer = _scene.get_node_or_null("WaveTimer")
-	if wave_timer is Timer:
-		hud.time = int(ceil(wave_timer.time_left))
-	hud.wave = _run_data_value("current_wave", 0)
-	var rd = get_node_or_null("/root/RunData")
-	var players = _scene.get("_players")
-	if rd == null or typeof(players) != TYPE_ARRAY:
-		return hud
-	for i in players.size():
-		var p = players[i]
-		var entry := {"hp": 0, "mhp": 1, "lvl": 0, "xp": 0.0, "xpn": 1.0, "gold": 0}
-		if is_instance_valid(p) and p.get("current_stats") != null:
-			entry.hp = int(p.current_stats.health)
-			entry.mhp = max(1, int(p.max_stats.health))
-		entry.lvl = rd.get_player_level(i)
-		entry.xp = rd.get_player_xp(i)
-		entry.xpn = rd.get_next_level_xp_needed(i)
-		entry.gold = rd.get_player_gold(i)
-		hud.players.append(entry)
-	return hud
 
 
 func _run_data_value(prop: String, default):

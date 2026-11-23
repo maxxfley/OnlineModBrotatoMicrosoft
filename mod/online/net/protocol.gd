@@ -2,7 +2,7 @@ extends Reference
 # Protocolo de mensajes del mod. Cada mensaje es un Dictionary con la clave "t"
 # (tipo) serializado con var2bytes (sin objetos: bytes2var no los permite).
 
-const PROTOCOL_VERSION := 3
+const PROTOCOL_VERSION := 5
 const DEFAULT_PORT := 24565
 const MAX_CLIENTS := 3  # host + 3 = 4 jugadores (máximo del co-op)
 
@@ -10,6 +10,7 @@ const MAX_CLIENTS := 3  # host + 3 = 4 jugadores (máximo del co-op)
 const CH_CONTROL := 0   # confiable: handshake, lobby, estado
 const CH_INPUT := 1     # no confiable: input de clientes, ping
 const CH_SNAPSHOT := 2  # no confiable: snapshots del mundo
+const CH_UI := 3        # confiable: espejo de interfaz (menús y HUD)
 
 # Tipos de mensaje
 const HELLO := "hello"        # cliente → host: {proto, mod, game, name}
@@ -25,7 +26,8 @@ const INPUT_UI := "ui"        # cliente → host (confiable): {a: acción base, 
 const WAVE_START := "wstart"  # confiable: mapa de la oleada {w, h, tiles, cells, outline, bg, tile_size}
 const WAVE_END := "wend"      # confiable: la oleada terminó (menús)
 const DEFS := "defs"          # confiable: definiciones de sprites {list: [[id, def], ...]}
-const SNAP := "snap"          # no confiable: {s: seq, b: PoolByteArray, hud: {...}}
+const SNAP := "snap"          # no confiable: {s: seq, n: tamaño, b: PoolByteArray comprimido}
+const UI_MIRROR := "uim"      # confiable: {n: tamaño, b: payload comprimido} (ver ui_mirror_host.gd)
 
 # Capas de dibujo del visor (mismo orden que la escena de oleada del juego)
 const LAYERS := ["Materials", "Consumables", "Births", "Entities", "PlayerProjectiles", "EnemyProjectiles", "Effects", "Explosions"]

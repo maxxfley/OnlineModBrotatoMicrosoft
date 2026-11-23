@@ -11,6 +11,8 @@ const RemoteInputHost = preload("res://online_mod/input/remote_input_host.gd")
 const LocalInputClient = preload("res://online_mod/input/local_input_client.gd")
 const WorldSyncHost = preload("res://online_mod/sync/world_sync_host.gd")
 const WaveViewerClient = preload("res://online_mod/sync/wave_viewer_client.gd")
+const UiMirrorHost = preload("res://online_mod/sync/ui_mirror_host.gd")
+const UiMirrorClient = preload("res://online_mod/sync/ui_mirror_client.gd")
 
 const TOGGLE_KEY := KEY_F9
 const DEV_AUTOCONNECT_DELAY := 4.0
@@ -22,11 +24,14 @@ var input_host: Node
 var input_client: Node
 var sync_host: Node
 var viewer: Node2D
+var ui_host: Node
+var ui_client: CanvasLayer
 
 var _toggle_was_down := false
 var _autoconnect_timer := -1.0
 var _selftest_t := -1.0
 var _selftest_seq := 0
+var _fps_log_timer := 5.0
 
 
 func _ready() -> void:
@@ -73,6 +78,20 @@ func _ready() -> void:
 	session.connect("sync_received", viewer, "on_sync")
 	viewer.connect("viewing_changed", input_client, "set_viewing")
 
+	ui_host = UiMirrorHost.new()
+	ui_host.name = "UiMirrorHost"
+	ui_host.session = session
+	ui_host.logger = logger
+	add_child(ui_host)
+	session.connect("peer_joined", ui_host, "on_peer_joined")
+
+	ui_client = UiMirrorClient.new()
+	ui_client.name = "UiMirror"
+	ui_client.logger = logger
+	add_child(ui_client)
+	session.connect("sync_received", ui_client, "on_sync")
+	ui_client.connect("showing_changed", input_client, "set_screen")
+
 	lobby = LobbyPanel.new()
 	lobby.name = "LobbyPanel"
 	lobby.session = session
@@ -98,6 +117,14 @@ func _process(delta: float) -> void:
 
 	if _selftest_t >= 0.0:
 		_run_selftest(delta)
+
+	if session.state == session.State.CONNECTED:
+		_fps_log_timer -= delta
+		if _fps_log_timer <= 0.0:
+			_fps_log_timer = 5.0
+			logger.info("[perf] FPS cliente: %d | visor %s | target_fps %d | vsync %s" % [
+				Engine.get_frames_per_second(), "activo" if viewer.active else "inactivo",
+				Engine.target_fps, str(OS.vsync_enabled)])
 
 	if _autoconnect_timer > 0.0:
 		_autoconnect_timer -= delta
@@ -128,6 +155,7 @@ func _on_state_changed(state: int) -> void:
 	else:
 		input_client.stop()
 		viewer.reset()
+		ui_client.reset()
 
 
 # Desarrollo (ONLINE_MOD_SELFTEST=1): el cliente envía una secuencia de input

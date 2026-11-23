@@ -7,7 +7,7 @@ const Protocol = preload("res://online_mod/net/protocol.gd")
 
 const GROUND_TILESET := "res://resources/tiles/ground_tiles.tres"
 const OUTLINE_TEXTURE := "res://resources/tiles/tiles_outline.png"
-const SNAPSHOT_INTERVAL := 1.0 / 20.0
+const RENDER_DELAY_MS := 100  # dibujar en el pasado para interpolar siempre
 
 signal viewing_changed(active)
 
@@ -21,15 +21,14 @@ var _layers := []
 var _camera: Camera2D
 var _bg_layer: CanvasLayer
 var _bg: TextureRect
-var _hud_layer: CanvasLayer
-var _hud_label: Label
 var _entities := {}        # key → {node, sprites: [], defs: [], from, to}
-var _cam_from := Vector2.ZERO
-var _cam_to := Vector2.ZERO
-var _last_snap_ms := 0
+var _queue := []          # snapshots decodificados, ordenados por tiempo del host
+var _applied = null
+var _clock_offset = null  # ms locales - ms del host (mínimo observado)
 var _last_seq := 0
 var _hidden_scene_items := []
 var _snap_count := 0
+var _fx_scenes := {}  # ruta → PackedScene (o null)
 
 
 func _ready() -> void:
@@ -132,14 +131,6 @@ func _start_wave(msg: Dictionary) -> void:
 	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bg_layer.add_child(_bg)
 
-	_hud_layer = CanvasLayer.new()
-	_hud_layer.layer = 100
-	add_child(_hud_layer)
-	_hud_label = Label.new()
-	_hud_label.rect_position = Vector2(20, 20)
-	_hud_label.rect_scale = Vector2(2, 2)
-	_hud_label.add_color_override("font_color_shadow", Color.black)
-	_hud_layer.add_child(_hud_label)
 
 	_hide_game_scene()
 	visible = true
@@ -155,8 +146,10 @@ func _stop_wave() -> void:
 	active = false
 	visible = false
 	_entities.clear()
+	_queue.clear()
+	_applied = null
 	_layers = []
-	for n in [_world, _bg_layer, _hud_layer]:
+	for n in [_world, _bg_layer]:
 		if is_instance_valid(n):
 			n.queue_free()
 	_world = null
@@ -189,6 +182,9 @@ func _restore_game_scene() -> void:
 
 # --- snapshots ---
 
+# Los snapshots se decodifican al llegar y se guardan en un buffer. El cliente dibuja
+# RENDER_DELAY_MS en el pasado (según el reloj del host), siempre entre dos snapshots
+# conocidos: así el movimiento es suave aunque los paquetes lleguen con variaciones.
 func _apply_snapshot(msg: Dictionary) -> void:
 	var seq := int(msg.get("s", 0))
 	if seq <= _last_seq and _last_seq - seq < 1000:
@@ -202,71 +198,104 @@ func _apply_snapshot(msg: Dictionary) -> void:
 	var buf := StreamPeerBuffer.new()
 	buf.big_endian = false
 	buf.data_array = raw
-	buf.get_u32()  # tiempo del host (reservado)
-	var cam := Vector2(buf.get_float(), buf.get_float())
-	var zoom := buf.get_float()
-	_cam_from = _camera.position if _snap_count > 0 else cam
-	_cam_to = cam
-	_camera.zoom = Vector2(zoom, zoom)
-
-	var seen := {}
+	var host_t := buf.get_u32()
+	var state := {"t": host_t, "cam": Vector2(buf.get_float(), buf.get_float()), "zoom": buf.get_float(),
+			"ents": [], "pos": {}, "fx": msg.get("fx", [])}
 	var entity_count := buf.get_u16()
 	for _e in entity_count:
 		var key := buf.get_u32()
 		var layer := buf.get_u8()
 		var pos := Vector2(buf.get_float(), buf.get_float())
 		var sprite_count := buf.get_u8()
+		var sprites := []
+		for _si in sprite_count:
+			var sp := [buf.get_u16(), buf.get_16(), buf.get_16(), buf.get_16(), buf.get_16(), buf.get_16(),
+					buf.get_u16(), buf.get_16(), buf.get_u8(), Color.white]
+			if sp[8] & Protocol.FLAG_MODULATE:
+				sp[9] = Color8(buf.get_u8(), buf.get_u8(), buf.get_u8(), buf.get_u8())
+			sprites.append(sp)
+		state.ents.append([key, layer, pos, sprites])
+		state.pos[key] = pos
+	# Diferencia de relojes: se toma el mínimo observado (el paquete más rápido) y se
+	# deja derivar lentamente hacia arriba por si los relojes se separan.
+	var offset: int = OS.get_ticks_msec() - host_t
+	if _clock_offset == null or offset < _clock_offset:
+		_clock_offset = offset
+	else:
+		_clock_offset += 1 if offset > _clock_offset + 5 else 0
+	_queue.append(state)
+	if _queue.size() > 30:
+		_queue.pop_front()
+	_snap_count += 1
+	if _snap_count == 1:
+		_log("Primer snapshot: %d entidades, %d defs conocidas" % [entity_count, _defs.size()])
+
+
+# Aplica lo visual de un snapshot (entidades, sprites, partículas). Las posiciones
+# las interpola _process.
+func _apply_state(state: Dictionary) -> void:
+	_camera.zoom = Vector2(state.zoom, state.zoom)
+	var seen := {}
+	for e in state.ents:
+		var key = e[0]
 		var ent = _entities.get(key)
 		if ent == null or not is_instance_valid(ent.node):
 			var node := Node2D.new()
-			_layers[min(layer, _layers.size() - 1)].add_child(node)
-			node.position = pos
-			ent = {"node": node, "sprites": [], "defs": [], "from": pos, "to": pos}
+			_layers[min(e[1], _layers.size() - 1)].add_child(node)
+			node.position = e[2]
+			ent = {"node": node, "sprites": [], "defs": []}
 			_entities[key] = ent
-		else:
-			ent.from = ent.node.position
-			ent.to = pos
 		seen[key] = true
-		_sync_sprite_count(ent, sprite_count)
-		for si in sprite_count:
-			var def_id := buf.get_u16()
-			var lx := buf.get_16()
-			var ly := buf.get_16()
-			var rot := buf.get_16() / Protocol.ROT_SCALE
-			var sx := buf.get_16() / Protocol.SCALE_SCALE
-			var sy := buf.get_16() / Protocol.SCALE_SCALE
-			var frame := buf.get_u16()
-			var z := buf.get_16()
-			var flags := buf.get_u8()
-			var mod := Color.white
-			if flags & Protocol.FLAG_MODULATE:
-				mod = Color8(buf.get_u8(), buf.get_u8(), buf.get_u8(), buf.get_u8())
+		var sprites: Array = e[3]
+		_sync_sprite_count(ent, sprites.size())
+		for si in sprites.size():
+			var sp: Array = sprites[si]
 			var s: Sprite = ent.sprites[si]
-			if ent.defs[si] != def_id:
-				if not _configure_sprite(s, def_id):
+			if ent.defs[si] != sp[0]:
+				if not _configure_sprite(s, sp[0]):
 					s.visible = false
 					continue
-				ent.defs[si] = def_id
+				ent.defs[si] = sp[0]
 			s.visible = true
-			s.position = Vector2(lx, ly)
-			s.rotation = rot
-			s.scale = Vector2(sx, sy)
-			s.frame = int(min(frame, s.hframes * s.vframes - 1))
-			s.z_index = z
-			s.flip_h = (flags & Protocol.FLAG_FLIP_H) != 0
-			s.flip_v = (flags & Protocol.FLAG_FLIP_V) != 0
-			s.modulate = mod
+			s.position = Vector2(sp[1], sp[2])
+			s.rotation = sp[3] / Protocol.ROT_SCALE
+			s.scale = Vector2(sp[4] / Protocol.SCALE_SCALE, sp[5] / Protocol.SCALE_SCALE)
+			s.frame = int(min(sp[6], s.hframes * s.vframes - 1))
+			s.z_index = sp[7]
+			s.flip_h = (sp[8] & Protocol.FLAG_FLIP_H) != 0
+			s.flip_v = (sp[8] & Protocol.FLAG_FLIP_V) != 0
+			s.modulate = sp[9]
 	for key in _entities.keys():
 		if not seen.has(key):
 			var gone = _entities[key]
 			if is_instance_valid(gone.node):
 				gone.node.queue_free()
 			_entities.erase(key)
-	_last_snap_ms = OS.get_ticks_msec()
-	_snap_count += 1
-	if _snap_count == 1:
-		_log("Primer snapshot: %d entidades, %d defs conocidas" % [entity_count, _defs.size()])
-	_update_hud(msg.get("hud", {}))
+	for fx in state.fx:
+		_play_fx(fx)
+
+
+# Reproduce localmente una emisión de partículas del host (sangre, etc.).
+func _play_fx(fx: Array) -> void:
+	var path: String = fx[0]
+	if not _fx_scenes.has(path):
+		_fx_scenes[path] = load(path) if ResourceLoader.exists(path) else null
+	var scene = _fx_scenes[path]
+	if scene == null or _layers.size() <= 6:
+		return
+	var node = scene.instance()
+	if not (node is CPUParticles2D or node is Particles2D):
+		node.queue_free()
+		return
+	_layers[6].add_child(node)  # capa "Effects"
+	node.global_position = fx[1]
+	node.global_rotation = fx[2]
+	node.global_scale = fx[4]
+	node.amount = max(1, int(fx[3]))
+	node.one_shot = true
+	node.restart()
+	var life: float = node.lifetime / max(0.01, node.speed_scale) + 0.5
+	get_tree().create_timer(life, true).connect("timeout", node, "queue_free")
 
 
 func _sync_sprite_count(ent: Dictionary, count: int) -> void:
@@ -312,26 +341,31 @@ func _texture(path: String):
 
 
 func _process(_delta: float) -> void:
-	if not active or _snap_count == 0:
+	if not active or _queue.empty():
 		return
-	var alpha: float = clamp((OS.get_ticks_msec() - _last_snap_ms) / 1000.0 / SNAPSHOT_INTERVAL, 0.0, 1.0)
-	_camera.position = _cam_from.linear_interpolate(_cam_to, alpha)
+	var render_t: float = OS.get_ticks_msec() - _clock_offset - RENDER_DELAY_MS
+	# A = último snapshot con t <= render_t; B = el siguiente (para interpolar).
+	var ai := 0
+	while ai + 1 < _queue.size() and _queue[ai + 1].t <= render_t:
+		ai += 1
+	var a: Dictionary = _queue[ai]
+	if a != _applied:
+		_applied = a
+		_apply_state(a)
+	while ai > 0:
+		_queue.pop_front()  # los anteriores a A ya no se necesitan
+		ai -= 1
+	var b = _queue[1] if _queue.size() > 1 else null
+	var alpha := 0.0
+	if b != null and b.t > a.t:
+		alpha = clamp((render_t - a.t) / float(b.t - a.t), 0.0, 1.0)
+	_camera.position = a.cam.linear_interpolate(b.cam, alpha) if b != null else a.cam
 	for key in _entities:
-		var ent = _entities[key]
-		ent.node.position = ent.from.linear_interpolate(ent.to, alpha)
-
-
-# --- HUD (provisorio: texto) ---
-
-func _update_hud(hud: Dictionary) -> void:
-	var lines := []
-	lines.append("Oleada %s   %ss" % [str(hud.get("wave", "?")), str(hud.get("time", "?"))])
-	var players: Array = hud.get("players", [])
-	for i in players.size():
-		var p = players[i]
-		lines.append("J%d  Vida %d/%d   Nv %d (%d/%d)   Materiales %d" % [
-			i + 1, p.hp, p.mhp, p.lvl, int(p.xp), int(p.xpn), p.gold])
-	_hud_label.text = PoolStringArray(lines).join("\n")
+		var pa = a.pos.get(key)
+		if pa == null:
+			continue
+		var pb = b.pos.get(key, pa) if b != null else pa
+		_entities[key].node.position = pa.linear_interpolate(pb, alpha)
 
 
 func _log(text: String) -> void:
