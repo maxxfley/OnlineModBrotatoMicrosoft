@@ -9,6 +9,8 @@ const LobbyPanel = preload("res://online_mod/ui/lobby_panel.gd")
 const Protocol = preload("res://online_mod/net/protocol.gd")
 const RemoteInputHost = preload("res://online_mod/input/remote_input_host.gd")
 const LocalInputClient = preload("res://online_mod/input/local_input_client.gd")
+const WorldSyncHost = preload("res://online_mod/sync/world_sync_host.gd")
+const WaveViewerClient = preload("res://online_mod/sync/wave_viewer_client.gd")
 
 const TOGGLE_KEY := KEY_F9
 const DEV_AUTOCONNECT_DELAY := 4.0
@@ -18,6 +20,8 @@ var session: Node
 var lobby: CanvasLayer
 var input_host: Node
 var input_client: Node
+var sync_host: Node
+var viewer: Node2D
 
 var _toggle_was_down := false
 var _autoconnect_timer := -1.0
@@ -54,6 +58,20 @@ func _ready() -> void:
 	input_client.session = session
 	input_client.logger = logger
 	add_child(input_client)
+
+	sync_host = WorldSyncHost.new()
+	sync_host.name = "WorldSyncHost"
+	sync_host.session = session
+	sync_host.logger = logger
+	add_child(sync_host)
+	session.connect("peer_joined", sync_host, "on_peer_joined")
+
+	viewer = WaveViewerClient.new()
+	viewer.name = "WaveViewer"
+	viewer.logger = logger
+	add_child(viewer)
+	session.connect("sync_received", viewer, "on_sync")
+	viewer.connect("viewing_changed", input_client, "set_viewing")
 
 	lobby = LobbyPanel.new()
 	lobby.name = "LobbyPanel"
@@ -109,6 +127,7 @@ func _on_state_changed(state: int) -> void:
 			input_client.suspended = true  # el auto-test envía su propio input
 	else:
 		input_client.stop()
+		viewer.reset()
 
 
 # Desarrollo (ONLINE_MOD_SELFTEST=1): el cliente envía una secuencia de input

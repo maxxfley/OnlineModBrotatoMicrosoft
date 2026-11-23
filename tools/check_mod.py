@@ -37,7 +37,10 @@ def make_project(dev: bool) -> str:
         for a in GAME_ACTIONS:
             f.write(a + '={"deadzone": 0.5, "events": [  ]}\n')
     with open(os.path.join(proj, 'main.tscn'), 'w', newline='\n') as f:
-        f.write('[gd_scene format=2]\n\n[node name="Main" type="Node"]\n')
+        f.write('[gd_scene load_steps=2 format=2]\n\n'
+                '[ext_resource path="res://main_test.gd" type="Script" id=1]\n\n'
+                '[node name="Main" type="Node2D"]\nscript = ExtResource( 1 )\n')
+    shutil.copy(os.path.join(ROOT, 'tools', 'check_scene.gd'), os.path.join(proj, 'main_test.gd'))
     dst = os.path.join(proj, 'online_mod')
     shutil.copytree(os.path.join(ROOT, 'mod', 'online'), dst)
     version = open(os.path.join(ROOT, 'mod', 'VERSION'), encoding='utf-8').read().strip()

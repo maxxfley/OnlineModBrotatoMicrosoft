@@ -2,7 +2,7 @@ extends Reference
 # Protocolo de mensajes del mod. Cada mensaje es un Dictionary con la clave "t"
 # (tipo) serializado con var2bytes (sin objetos: bytes2var no los permite).
 
-const PROTOCOL_VERSION := 2
+const PROTOCOL_VERSION := 3
 const DEFAULT_PORT := 24565
 const MAX_CLIENTS := 3  # host + 3 = 4 jugadores (máximo del co-op)
 
@@ -20,6 +20,23 @@ const PING := "ping"          # {ts}
 const PONG := "pong"          # {ts}
 const INPUT_AXES := "in"      # cliente → host (no confiable): {s: seq, mv: Vector2, aim: Vector2}
 const INPUT_UI := "ui"        # cliente → host (confiable): {a: acción base, p: bool presionado}
+
+# Sincronización del mundo (host → clientes)
+const WAVE_START := "wstart"  # confiable: mapa de la oleada {w, h, tiles, cells, outline, bg, tile_size}
+const WAVE_END := "wend"      # confiable: la oleada terminó (menús)
+const DEFS := "defs"          # confiable: definiciones de sprites {list: [[id, def], ...]}
+const SNAP := "snap"          # no confiable: {s: seq, b: PoolByteArray, hud: {...}}
+
+# Capas de dibujo del visor (mismo orden que la escena de oleada del juego)
+const LAYERS := ["Materials", "Consumables", "Births", "Entities", "PlayerProjectiles", "EnemyProjectiles", "Effects", "Explosions"]
+const LAYER_YSORT := 3
+
+# Cuantización de snapshots
+const ROT_SCALE := 10000.0   # radianes * ROT_SCALE → int16
+const SCALE_SCALE := 1000.0  # escala * SCALE_SCALE → int16
+const FLAG_FLIP_H := 1
+const FLAG_FLIP_V := 2
+const FLAG_MODULATE := 4
 
 # Acciones de UI que el cliente reenvía (nombres base, sin sufijo de dispositivo)
 const UI_ACTIONS := [

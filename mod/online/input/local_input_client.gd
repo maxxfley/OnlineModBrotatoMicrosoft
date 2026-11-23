@@ -49,6 +49,12 @@ func start(host_name: String) -> void:
 	_log("Enviando input al host")
 
 
+# Con el visor de oleada activo se oculta el cartel (el cliente ve la partida).
+func set_viewing(viewing: bool) -> void:
+	if _active:
+		_overlay_root.visible = not viewing
+
+
 func stop() -> void:
 	if not _active:
 		return

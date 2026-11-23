@@ -8,6 +8,7 @@ signal message(text)
 signal peer_joined(peer_id, peer_name)  # host: cliente aceptado
 signal peer_left(peer_id)               # host: cliente desconectado
 signal input_received(peer_id, msg)     # host: input de un cliente
+signal sync_received(msg)                # cliente: mensaje de sincronización del host
 
 const Protocol = preload("res://online_mod/net/protocol.gd")
 const Transport = preload("res://online_mod/net/enet_transport.gd")
@@ -257,6 +258,9 @@ func _on_packet(sender: int, data: PoolByteArray) -> void:
 	elif t == Protocol.INPUT_AXES or t == Protocol.INPUT_UI:
 		if state == State.HOSTING and peers.has(sender) and peers[sender].ready:
 			emit_signal("input_received", sender, msg)
+	elif t == Protocol.WAVE_START or t == Protocol.WAVE_END or t == Protocol.DEFS or t == Protocol.SNAP:
+		if state == State.CONNECTED and sender == 1:
+			emit_signal("sync_received", msg)
 	elif t == Protocol.HELLO:
 		if state == State.HOSTING:
 			_handle_hello(sender, msg)
@@ -271,6 +275,30 @@ func _on_packet(sender: int, data: PoolByteArray) -> void:
 			_handle_peers(msg)
 	else:
 		_log("Mensaje desconocido '%s' de %d" % [str(t), sender])
+
+
+# Host: envía a todos los clientes que terminaron el handshake.
+func broadcast(channel: int, reliable: bool, msg: Dictionary) -> void:
+	if state != State.HOSTING:
+		return
+	var data := Protocol.encode(msg)
+	for id in peers:
+		if peers[id].ready:
+			_transport.send(id, channel, reliable, data)
+
+
+# Host: envía a un cliente puntual.
+func send_to_peer(peer_id: int, channel: int, reliable: bool, msg: Dictionary) -> void:
+	if state == State.HOSTING and peers.has(peer_id) and peers[peer_id].ready:
+		_send(peer_id, channel, reliable, msg)
+
+
+func ready_peer_count() -> int:
+	var n := 0
+	for id in peers:
+		if peers[id].ready:
+			n += 1
+	return n
 
 
 # Cliente: envía un mensaje al host (solo si el handshake terminó).
