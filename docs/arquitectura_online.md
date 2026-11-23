@@ -56,7 +56,18 @@ Puerto por defecto a definir (p. ej. 24565). NAT: conexión directa por IP o VPN
 4. **Menús sincronizados**: selección de personaje/armas/dificultad, mejoras y tienda.
 5. **Pulido**: predicción local del movimiento propio, reconexión, desconexiones, compresión
    delta de snapshots, sonidos/efectos visuales en el cliente.
-6. **Distribución**: parcheador para usuarios finales (aplica overlay sobre su `boot.hvp`).
+6. **Distribución**: **instalador `.exe`** para usuarios finales, con botones
+   Instalar / Desinstalar / Reinstalar tras actualización. Automáticamente:
+   - detecta la instalación de Brotato (ruta elegida por el usuario en la app Xbox, vía
+     `Get-AppxPackage` o búsqueda en `<unidad>:\XboxGames\Brotato\Content`);
+   - verifica versión del juego y que no esté abierto;
+   - hace backup del `boot.hvp` original;
+   - genera el nuevo `boot.hvp` aplicando el overlay del mod sobre **la copia del usuario**
+     (el `.exe` solo contiene código propio del mod, nunca archivos del juego);
+   - detecta si una actualización del juego borró el parche y ofrece reaplicarlo.
+   Tecnología candidata: el empaquetador Python actual empaquetado como `.exe`
+   (PyInstaller) con interfaz simple. Riesgo: falsos positivos de antivirus en `.exe`
+   sin firma.
 
 ## Riesgos / preguntas abiertas
 - Latencia: el movimiento propio llega con 1 RTT de retraso hasta tener predicción (fase 5).
