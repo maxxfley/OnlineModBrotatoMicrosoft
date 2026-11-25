@@ -35,3 +35,7 @@ backup/
 
 # Python
 __pycache__/
+
+# Notas de desarrollo con Claude (no van al repo público)
+CLAUDE.md
+CONTEXT.md
